@@ -301,12 +301,12 @@ enum AgentUsageArchiveTests {
             ("AgentLiveSession", labels(sampleTurn),
              ["id", "provider", "started", "lastActivity", "model", "project", "tokens", "cost"]),
             ("AgentLogCursor", labels(cursor),
-             ["path", "provider", "tracksTurns", "parent", "openCode", "offset", "identity", "pending", "discarding",
+             ["path", "provider", "parent", "openCode", "offset", "identity", "pending", "discarding",
               "state", "modified", "restarted", "fingerprinted"]),
             ("AgentLogCursor.Saved", labels(cursor.saved),
              ["path", "provider", "offset", "identity", "discarding", "modified", "state", "fingerprint"]),
             ("AgentLogState", labels(cursor.state),
-             ["session", "project", "model", "turnOpen", "sawUsageRecords", "lastTotal", "fast",
+             ["session", "project", "model", "turnOpen", "sawUsageRecords", "lastTotal", "fast", "codexSubagent", "codexLogStarted",
               "copilotTotals", "copilotRequests", "copilotRequestModels", "copilotReportedRequests",
               "copilotTurnID", "copilotFinalResponse", "parentSession", "openCodeSessions", "runningCommands"])
         ]

@@ -451,11 +451,29 @@ final class AgentUsageService: ObservableObject {
             case .opencode: entries = AgentLogParser.parseOpenCode(line, state: &cursor.state, now: now)
             case .copilot: entries = AgentLogParser.parseCopilot(line, state: &cursor.state, now: now)
             }
-            guard !entries.isEmpty else { return }
-            changed = true
+            guard !entries.isEmpty || (provider == .codex && AgentLogParser.firstType(line)?.name == "session_meta")
+            else { return }
+            changed = !entries.isEmpty || changed
             let isSubagent = provider == .opencode && !cursor.state.parentSession.isEmpty
             let turnFile = provider == .opencode && !cursor.state.session.isEmpty ? "\(path)#\(cursor.state.session)" : path
-            let tracksTurns = isSubagent ? false : cursor.tracksTurns
+            var tracksTurns = isSubagent ? false : cursor.tracksTurns
+            if provider == .codex, tracksTurns, !cursor.state.session.isEmpty {
+                // A desktop thread can continue in another rollout file. The
+                // newest segment owns its live turn; late writes to an older
+                // segment still count usage but cannot revive an old task.
+                let siblings = cursors.values.filter {
+                    $0.provider == .codex && $0.tracksTurns && $0.state.session == cursor.state.session
+                }
+                let latest = siblings.max {
+                    let left = $0.state.codexLogStarted ?? .distantPast
+                    let right = $1.state.codexLogStarted ?? .distantPast
+                    return left == right ? $0.path < $1.path : left < right
+                }
+                tracksTurns = latest?.path == path
+                for sibling in siblings where sibling.path != latest?.path {
+                    changed = store.forget(file: sibling.path) || changed
+                }
+            }
             let parent = isSubagent ? "\(path)#\(cursor.state.parentSession)" : cursor.parent
             let finished = store.apply(entries, file: turnFile, provider: provider, tracksTurns: tracksTurns,
                                        parent: parent, modified: cursor.modified, now: now)

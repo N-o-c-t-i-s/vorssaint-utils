@@ -40,6 +40,10 @@ struct AgentLogState: Equatable {
     var lastTotal: AgentTokens?
     /// Codex runs the thread on the fast tier, which bills at a premium.
     var fast = false
+    /// Codex also gives resumed main-thread logs a suffix. Only explicit
+    /// source metadata identifies a child agent, never the log's filename.
+    var codexSubagent = false
+    var codexLogStarted: Date?
     /// Copilot shutdown counters are cumulative for the life of a session.
     var copilotTotals: [String: AgentTokens] = [:]
     /// Counted requests by model; the empty key holds unresolved attribution.
@@ -258,8 +262,14 @@ enum AgentLogParser {
         let date = timestamp(json["timestamp"]) ?? now
         switch json["type"] as? String {
         case "session_meta":
+            // Forked logs can replay the parent's entire history, including
+            // its metadata. The first header identifies this physical log.
+            guard state.codexLogStarted == nil else { return [] }
             if let id = payload["id"] as? String, !id.isEmpty { state.session = native(id) }
             if let cwd = payload["cwd"] as? String, !cwd.isEmpty { state.project = projectName(cwd) }
+            let source = payload["source"] as? [String: Any]
+            state.codexSubagent = source?["subagent"] != nil || payload["source"] as? String == "subagent"
+            state.codexLogStarted = date
             return []
         case "turn_context":
             if let model = payload["model"] as? String, !model.isEmpty { state.model = native(model) }

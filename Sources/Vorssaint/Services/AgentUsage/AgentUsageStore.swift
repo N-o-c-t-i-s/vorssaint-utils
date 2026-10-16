@@ -553,7 +553,9 @@ final class AgentLogCursor {
     let path: String
     let provider: AgentProvider
     /// Subagents and side threads report to a turn another file tracks.
-    let tracksTurns: Bool
+    var tracksTurns: Bool {
+        provider == .claude ? parent == nil : (provider == .codex ? !state.codexSubagent : true)
+    }
     /// The session log a Claude subagent works for.
     let parent: String?
     /// Replies still being written and the rows read last, for a database.
@@ -572,10 +574,8 @@ final class AgentLogCursor {
     init(path: String, provider: AgentProvider) {
         self.path = path
         self.provider = provider
-        let name = (path as NSString).lastPathComponent
         let parent = provider == .claude ? AgentLogCursor.parent(of: path) : nil
         self.parent = parent
-        tracksTurns = provider == .claude ? parent == nil : (provider == .codex ? !name.contains("_") : true)
     }
 
     /// Where reading stopped, at a line boundary: a line still being written
