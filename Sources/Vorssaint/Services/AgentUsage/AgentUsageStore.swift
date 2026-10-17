@@ -552,7 +552,7 @@ struct AgentSessionRegistry: Equatable {
 final class AgentLogCursor {
     let path: String
     let provider: AgentProvider
-    /// Subagents and side threads report to a turn another file tracks.
+    /// Subagents report to a turn another file tracks.
     var tracksTurns: Bool {
         provider == .claude ? parent == nil : (provider == .codex ? !state.codexSubagent : true)
     }

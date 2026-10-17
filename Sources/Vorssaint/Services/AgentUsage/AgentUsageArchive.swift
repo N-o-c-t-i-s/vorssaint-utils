@@ -324,7 +324,7 @@ enum AgentUsageArchive {
             optional(value.lastTotal) { $0.tokens($1) }
             bool(value.fast)
             bool(value.codexSubagent)
-            optional(value.codexLogStarted) { $0.date($1) }
+            bool(value.codexHeaderRead)
             dictionary(value.copilotTotals) { $0.tokens($1) }
             dictionary(value.copilotRequests) { $0.int($1) }
             dictionary(value.copilotRequestModels) { $0.string($1) }
@@ -479,7 +479,7 @@ enum AgentUsageArchive {
             var value = AgentLogState(session: try string(), project: try string(), model: try string(), turnOpen: try bool(),
                                       sawUsageRecords: try bool(), lastTotal: try optional { try $0.tokens() }, fast: try bool())
             value.codexSubagent = try bool()
-            value.codexLogStarted = try optional { try $0.date() }
+            value.codexHeaderRead = try bool()
             value.copilotTotals = try dictionary { try $0.tokens() }
             value.copilotRequests = try dictionary { try $0.amount() }
             value.copilotRequestModels = try dictionary { try $0.string() }

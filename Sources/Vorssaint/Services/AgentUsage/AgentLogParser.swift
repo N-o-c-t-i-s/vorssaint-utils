@@ -40,10 +40,13 @@ struct AgentLogState: Equatable {
     var lastTotal: AgentTokens?
     /// Codex runs the thread on the fast tier, which bills at a premium.
     var fast = false
-    /// Codex also gives resumed main-thread logs a suffix. Only explicit
-    /// source metadata identifies a child agent, never the log's filename.
+    /// A Codex subagent, review or memory task works for a thread another
+    /// log follows. Only the log's metadata says so: a reverted thread goes
+    /// on in a log named after both the thread and a new rollout.
     var codexSubagent = false
-    var codexLogStarted: Date?
+    /// The first Codex metadata line describes the log's own thread; a later
+    /// one is history copied from the thread it came from.
+    var codexHeaderRead = false
     /// Copilot shutdown counters are cumulative for the life of a session.
     var copilotTotals: [String: AgentTokens] = [:]
     /// Counted requests by model; the empty key holds unresolved attribution.
@@ -253,7 +256,9 @@ enum AgentLogParser {
     static func parseCodex(_ line: Data, state: inout AgentLogState, now: Date) -> [AgentLogEntry] {
         guard let kind = firstType(line) else { return [] }
         switch kind.name {
-        case "token_usage_record", "turn_context", "session_meta": break
+        case "token_usage_record", "turn_context": break
+        // History copied from another thread repeats that thread's metadata.
+        case "session_meta": guard !state.codexHeaderRead else { return [] }
         case "event_msg":
             guard let event = firstType(line, from: kind.end), codexEvents.contains(event.name) else { return [] }
         default: return []
@@ -262,14 +267,13 @@ enum AgentLogParser {
         let date = timestamp(json["timestamp"]) ?? now
         switch json["type"] as? String {
         case "session_meta":
-            // Forked logs can replay the parent's entire history, including
-            // its metadata. The first header identifies this physical log.
-            guard state.codexLogStarted == nil else { return [] }
+            state.codexHeaderRead = true
             if let id = payload["id"] as? String, !id.isEmpty { state.session = native(id) }
             if let cwd = payload["cwd"] as? String, !cwd.isEmpty { state.project = projectName(cwd) }
+            // Subagents, reviews and memory tasks Codex starts itself name
+            // `subagent` or `internal`; a person's thread names its client.
             let source = payload["source"] as? [String: Any]
-            state.codexSubagent = source?["subagent"] != nil || payload["source"] as? String == "subagent"
-            state.codexLogStarted = date
+            state.codexSubagent = source?["subagent"] != nil || source?["internal"] != nil
             return []
         case "turn_context":
             if let model = payload["model"] as? String, !model.isEmpty { state.model = native(model) }

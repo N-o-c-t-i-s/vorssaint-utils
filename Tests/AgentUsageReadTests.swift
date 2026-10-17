@@ -178,7 +178,7 @@ enum AgentUsageReadTests {
             suite.expect(!host.read(file.path, provider: provider), "a cancelled reading consumes no more entries")
         }
         startup(suite, folder: folder.appending(path: "home"), cases: cases)
-        codexSegments(suite, folder: folder)
+        codexThreads(suite, folder: folder)
 
         let openFile = folder.appending(path: "copilot-open.jsonl")
         let openLines = [
@@ -233,7 +233,7 @@ enum AgentUsageReadTests {
                      "Copilot rescans use the same path boundary and do not duplicate live activity")
     }
 
-    private static func codexSegments(_ suite: TestSuite, folder: URL) {
+    private static func codexThreads(_ suite: TestSuite, folder: URL) {
         let now = Date().timeIntervalSince1970
         let host = Host()
         host.store.reportsTransitions = true
@@ -248,78 +248,80 @@ enum AgentUsageReadTests {
             _ = (target ?? host).read(file.path, provider: .codex)
             return file
         }
-        let original = write("rollout-main.jsonl", [
-            #"{"type":"session_meta","timestamp":\#(now - 30),"payload":{"id":"same-thread","source":"vscode"}}"#,
+        // Editing an earlier message reverts the thread: its turn stops, and
+        // the thread goes on in a log named after it and a new rollout.
+        let thread = "01a14017-9c92-7862-8f2a-2019293313fe"
+        let original = write("rollout-2026-10-16T10-00-00-\(thread).jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now - 30),"payload":{"id":"\#(thread)","source":"vscode"}}"#,
             #"{"type":"event_msg","timestamp":\#(now - 29),"payload":{"type":"task_started"}}"#
         ])
         suite.expect(host.store.live.count == 1, "a new Codex main thread is live")
-        let resumed = write("rollout-main_segment.jsonl", [
-            #"{"type":"session_meta","timestamp":\#(now - 10),"payload":{"id":"same-thread","source":"vscode"}}"#
-        ])
-        suite.expect(host.store.live.isEmpty && host.events.isEmpty,
-                     "a newer main-thread segment retires its predecessor on metadata alone without a completion notice")
-        _ = write(resumed.lastPathComponent, [
-            #"{"type":"event_msg","timestamp":\#(now - 9),"payload":{"type":"task_started"}}"#,
-            #"{"type":"token_usage_record","timestamp":\#(now - 8),"payload":{"response_id":"segment-response","usage":{"input_tokens":10,"output_tokens":4}}}"#,
-            #"{"type":"event_msg","timestamp":\#(now - 8),"payload":{"type":"token_count","rate_limits":{"plan_type":"plus","primary":{"used_percent":35,"window_minutes":300}}}}"#
-        ], append: true)
-        suite.expect(host.store.live.count == 1 && host.store.live.first?.id == resumed.path
-                        && host.store.records.count == 1 && host.store.limits[.codex] != nil,
-                     "an underscore main-thread segment owns the one live turn and continues usage and limits")
         _ = write(original.lastPathComponent, [
-            #"{"type":"event_msg","timestamp":\#(now - 5),"payload":{"type":"task_started"}}"#,
-            #"{"type":"event_msg","timestamp":\#(now - 4),"payload":{"type":"task_complete"}}"#
+            #"{"type":"event_msg","timestamp":\#(now - 20),"payload":{"type":"turn_aborted"}}"#
         ], append: true)
-        suite.expect(host.store.live.count == 1 && host.store.live.first?.id == resumed.path && host.events.isEmpty,
-                     "late writes to the old segment neither revive nor end the current segment")
-        let reverse = Host()
-        _ = reverse.read(resumed.path, provider: .codex)
-        _ = reverse.read(original.path, provider: .codex)
-        suite.expect(reverse.store.live.count == 1 && reverse.store.live.first?.id == resumed.path,
-                     "discovering the new segment before the old segment preserves the current turn")
-        for (index, source) in [#"{"subagent":{"thread_spawn":{"parent_thread_id":"same-thread"}}}"#,
-                                #"{"subagent":"compact"}"#, #""subagent""#].enumerated() {
+        let reverted = write("rollout-2026-10-16T10-20-00-\(thread)_01a14099-0000-7000-8000-000000000001.jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now - 10),"payload":{"id":"\#(thread)","source":"vscode"}}"#,
+            #"{"type":"event_msg","timestamp":\#(now - 9),"payload":{"type":"task_started"}}"#,
+            #"{"type":"token_usage_record","timestamp":\#(now - 8),"payload":{"response_id":"revert-response","usage":{"input_tokens":10,"output_tokens":4}}}"#,
+            #"{"type":"event_msg","timestamp":\#(now - 8),"payload":{"type":"token_count","rate_limits":{"plan_type":"plus","primary":{"used_percent":35,"window_minutes":300}}}}"#
+        ])
+        suite.expect(host.store.live.count == 1 && host.store.live.first?.id == reverted.path
+                        && host.store.live.first?.tokens.total == 14 && host.store.records.count == 1
+                        && host.store.limits[.codex] != nil && host.events.isEmpty,
+                     "a reverted Codex thread goes on in its underscored log with its live turn, usage and limits")
+        // Subagents, Guardian reviews and memory tasks have ordinary log
+        // names, and a child can copy its parent's history, metadata included.
+        let children = [("spawned", #"{"subagent":{"thread_spawn":{"parent_thread_id":"\#(thread)","depth":1}}}"#),
+                        ("guardian", #"{"subagent":{"other":"guardian"}}"#),
+                        ("compact", #"{"subagent":"compact"}"#),
+                        ("memory", #"{"internal":"memory_consolidation"}"#)]
+        for (index, (kind, source)) in children.enumerated() {
             let file = write("child\(index).jsonl", [
                 #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"child-\#(index)","source":\#(source)}}"#,
-                #"{"type":"session_meta","timestamp":\#(now + 1),"payload":{"id":"same-thread","source":"vscode"}}"#,
+                #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"\#(thread)","source":"vscode"}}"#,
                 #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_started"}}"#
             ])
             suite.expect(host.cursors[file.path]?.tracksTurns == false
                             && host.cursors[file.path]?.state.session == "child-\(index)" && host.store.live.count == 1,
-                         "a Codex child's own metadata stays authoritative when inherited parent metadata is replayed")
+                         "a Codex \(kind) log keeps its own metadata and owns no turn when its parent's is copied after it")
         }
         let saved = AgentUsageReadProductionArchive.Contents(providers: [.codex], store: host.store.saved,
                                                              cursors: host.cursors.values.map(\.saved))
-        let encoded = AgentUsageReadProductionArchive.encode(saved, build: "codex-segment-test")
-        let decoded = AgentUsageReadProductionArchive.decode(encoded, build: "codex-segment-test")
-        suite.expect(decoded == saved, "Codex source classification and segment times survive an archive round trip")
+        let encoded = AgentUsageReadProductionArchive.encode(saved, build: "codex-thread-test")
+        let decoded = AgentUsageReadProductionArchive.decode(encoded, build: "codex-thread-test")
+        suite.expect(decoded == saved, "Codex thread identity survives an archive round trip")
         if let decoded {
             let restored = AgentUsageReadProductionArchive.resume(decoded, logs: Set(host.cursors.keys), since: .distantPast)
-            suite.expect(restored.cursors[resumed.path]?.tracksTurns == true
+            suite.expect(restored.cursors[reverted.path]?.tracksTurns == true
                             && restored.cursors[folder.appending(path: "child0.jsonl").path]?.tracksTurns == false,
                          "restored Codex cursors preserve main and subagent identity without rereading metadata")
             let restoredHost = Host()
             restoredHost.cursors = restored.cursors
             restoredHost.store = restored.store
             _ = write("child0.jsonl", [
+                #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"\#(thread)","source":"vscode"}}"#,
                 #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_started"}}"#,
                 #"{"type":"token_usage_record","timestamp":\#(now),"payload":{"response_id":"child-response","usage":{"input_tokens":3,"output_tokens":2}}}"#
             ], append: true, into: restoredHost)
-            _ = write(resumed.lastPathComponent, [
+            _ = write(reverted.lastPathComponent, [
                 #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_complete"}}"#
             ], append: true, into: restoredHost)
             suite.expect(restoredHost.store.live.isEmpty && restoredHost.store.records.count == 2,
-                         "after cache restore a child adds usage without a turn and the resumed main task finishes")
+                         "after cache restore a child adds usage without a turn and the reverted thread's task finishes")
         }
-        _ = write(resumed.lastPathComponent, [
+        _ = write(reverted.lastPathComponent, [
             #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_complete","duration_ms":9000}}"#
         ], append: true)
         suite.expect(host.store.live.isEmpty && host.events.count == 1,
-                     "the current segment ends exactly once and clears the running indicator")
+                     "the reverted thread's task ends exactly once and clears the running indicator")
         let legacy = AgentLogCursor(path: folder.appending(path: "legacy_main.jsonl").path, provider: .codex)
         _ = AgentLogParser.parseCodex(Data(#"{"type":"session_meta","payload":{"id":"legacy"}}"#.utf8),
                                       state: &legacy.state, now: Date())
-        suite.expect(legacy.tracksTurns, "legacy Codex metadata defaults to a main thread regardless of its filename")
+        let custom = AgentLogCursor(path: folder.appending(path: "custom_client.jsonl").path, provider: .codex)
+        _ = AgentLogParser.parseCodex(Data(#"{"type":"session_meta","payload":{"id":"custom","source":{"custom":"editor"}}}"#.utf8),
+                                      state: &custom.state, now: Date())
+        suite.expect(legacy.tracksTurns && custom.tracksTurns,
+                     "Codex threads with no source or a custom client own their turns whatever the file name")
     }
 
     private static func startup(_ suite: TestSuite, folder: URL, cases: [(AgentProvider, [String])]) {
