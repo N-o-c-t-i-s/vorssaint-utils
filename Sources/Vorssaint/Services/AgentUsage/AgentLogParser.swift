@@ -50,6 +50,9 @@ struct AgentLogState: Equatable {
     /// The thread a person started that a Codex subagent works for, whose
     /// turn its responses count toward.
     var codexRoot = ""
+    /// The thread whose running totals the lines read now report: history
+    /// copied from another thread keeps that thread's, as in its own log.
+    var codexTotalsSession = ""
     /// Copilot shutdown counters are cumulative for the life of a session.
     var copilotTotals: [String: AgentTokens] = [:]
     /// Counted requests by model; the empty key holds unresolved attribution.
@@ -259,9 +262,7 @@ enum AgentLogParser {
     static func parseCodex(_ line: Data, state: inout AgentLogState, now: Date) -> [AgentLogEntry] {
         guard let kind = firstType(line) else { return [] }
         switch kind.name {
-        case "token_usage_record", "turn_context": break
-        // History copied from another thread repeats that thread's metadata.
-        case "session_meta": guard !state.codexHeaderRead else { return [] }
+        case "token_usage_record", "turn_context", "session_meta": break
         case "event_msg":
             guard let event = firstType(line, from: kind.end), codexEvents.contains(event.name) else { return [] }
         default: return []
@@ -270,8 +271,13 @@ enum AgentLogParser {
         let date = timestamp(json["timestamp"]) ?? now
         switch json["type"] as? String {
         case "session_meta":
+            // History copied from another thread repeats that thread's
+            // metadata; only the first line describes this log's own thread.
+            let id = payload["id"] as? String ?? ""
+            if !id.isEmpty { state.codexTotalsSession = native(id) }
+            guard !state.codexHeaderRead else { return [] }
             state.codexHeaderRead = true
-            if let id = payload["id"] as? String, !id.isEmpty { state.session = native(id) }
+            if !id.isEmpty { state.session = native(id) }
             if let cwd = payload["cwd"] as? String, !cwd.isEmpty { state.project = projectName(cwd) }
             // Subagents, reviews and memory tasks Codex starts itself name
             // `subagent` or `internal`; a person's thread names its client.
@@ -333,7 +339,7 @@ enum AgentLogParser {
                                             output: max(0, total.output - previous.output),
                                             reasoning: max(0, total.reasoning - previous.reasoning))
                     }
-                    let key = "codex:\(state.session):total:\(total.total)"
+                    let key = "codex:\(state.codexTotalsSession):total:\(total.total)"
                     entries.append(codexUsage(delta, key: key, date: date, state: state))
                 }
                 state.lastTotal = total

@@ -583,12 +583,12 @@ final class AgentLogCursor {
     }
 
     /// The log whose turn a Codex subagent's responses count toward. It can
-    /// be read after the subagent's, and a reverted thread goes on in a new
-    /// log, so it is looked for again whenever the logs change; the one
-    /// written last is the thread's current log.
+    /// be read after the subagent's or move, and a reverted thread goes on in
+    /// a new log, so it is looked for again when a log turns up or the one
+    /// found goes away; the one written last is the thread's current log.
     func codexParent(among cursors: [String: AgentLogCursor]) -> String? {
         guard provider == .codex, !state.codexRoot.isEmpty, !tracksTurns else { return nil }
-        if codexParentSearch != cursors.count {
+        if codexParentSearch != cursors.count || codexParentLog.map({ cursors[$0] == nil }) == true {
             codexParentSearch = cursors.count
             codexParentLog = cursors.values
                 .filter { $0.provider == .codex && $0.tracksTurns && $0.state.session == state.codexRoot }
@@ -725,8 +725,9 @@ enum AgentLogReader {
     }
 
     /// Log files changed since `horizon`, newest last so live turns settle
-    /// on the most recent state. Subagents come after every session, so the
-    /// turn each one works for already stands when its responses are read.
+    /// on the most recent state. Claude subagents come after every session,
+    /// so the turn each one works for already stands when its responses are
+    /// read.
     static func discover(_ roots: [AgentLogRoot], since horizon: Date) -> [(path: String, provider: AgentProvider)] {
         var found: [(path: String, provider: AgentProvider, modified: Date, subagent: Bool)] = []
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]

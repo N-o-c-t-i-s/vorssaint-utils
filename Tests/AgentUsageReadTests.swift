@@ -331,6 +331,48 @@ enum AgentUsageReadTests {
         ], append: true)
         suite.expect(host.store.live.isEmpty && host.events.count == 1,
                      "the reverted thread's task ends exactly once and clears the running indicator")
+        // A subagent can be read before its thread's log, and that log can move.
+        let early = Host()
+        let other = "01a14099-2222-7000-8000-000000000003"
+        _ = write("early-child.jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"early-child","session_id":"\#(other)","source":{"subagent":{"other":"guardian"}}}}"#,
+            #"{"type":"token_usage_record","timestamp":\#(now),"payload":{"response_id":"early-1","usage":{"input_tokens":1,"output_tokens":1}}}"#
+        ], into: early)
+        let otherLog = write("rollout-2026-10-16T11-00-00-\(other).jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now - 5),"payload":{"id":"\#(other)","source":"vscode"}}"#,
+            #"{"type":"event_msg","timestamp":\#(now - 5),"payload":{"type":"task_started"}}"#
+        ], into: early)
+        _ = write("early-child.jsonl", [
+            #"{"type":"token_usage_record","timestamp":\#(now + 1),"payload":{"response_id":"early-2","usage":{"input_tokens":2,"output_tokens":2}}}"#
+        ], append: true, into: early)
+        suite.expect(early.store.live.first?.id == otherLog.path && early.store.live.first?.tokens.total == 4,
+                     "a Codex subagent read before its thread's log counts toward it once that log is read")
+        let moved = folder.appending(path: "moved-\(otherLog.lastPathComponent)")
+        try? FileManager.default.moveItem(at: otherLog, to: moved)
+        _ = early.read(otherLog.path, provider: .codex)
+        _ = early.read(moved.path, provider: .codex)
+        _ = write("early-child.jsonl", [
+            #"{"type":"token_usage_record","timestamp":\#(now + 2),"payload":{"response_id":"early-3","usage":{"input_tokens":3,"output_tokens":3}}}"#
+        ], append: true, into: early)
+        suite.expect(early.store.live.first?.id == moved.path && early.store.live.first?.tokens.total == 6,
+                     "a Codex subagent follows its thread's log when the log moves")
+        // Logs from before per-response records report running totals, which
+        // a child's copy of its parent's history repeats.
+        let totals = Host()
+        let parentTotals = #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":10},"last_token_usage":{"input_tokens":100,"output_tokens":10}}}}"#
+        _ = write("totals-parent.jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"totals-parent","source":"cli"}}"#,
+            parentTotals
+        ], into: totals)
+        _ = write("totals-child.jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"totals-child","source":{"subagent":"review"}}}"#,
+            #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"totals-parent","source":"cli"}}"#,
+            parentTotals,
+            #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":130,"output_tokens":15},"last_token_usage":{"input_tokens":30,"output_tokens":5}}}}"#
+        ], into: totals)
+        suite.expect(totals.store.records.count == 2 && totals.store.records.map(\.tokens.total).reduce(0, +) == 145
+                        && totals.cursors[folder.appending(path: "totals-child.jsonl").path]?.state.session == "totals-child",
+                     "a Codex child's copy of its parent's running totals is not counted again")
         let legacy = AgentLogCursor(path: folder.appending(path: "legacy_main.jsonl").path, provider: .codex)
         _ = AgentLogParser.parseCodex(Data(#"{"type":"session_meta","payload":{"id":"legacy"}}"#.utf8),
                                       state: &legacy.state, now: Date())

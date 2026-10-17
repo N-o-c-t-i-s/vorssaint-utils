@@ -326,6 +326,7 @@ enum AgentUsageArchive {
             bool(value.codexSubagent)
             bool(value.codexHeaderRead)
             string(value.codexRoot)
+            string(value.codexTotalsSession)
             dictionary(value.copilotTotals) { $0.tokens($1) }
             dictionary(value.copilotRequests) { $0.int($1) }
             dictionary(value.copilotRequestModels) { $0.string($1) }
@@ -482,6 +483,7 @@ enum AgentUsageArchive {
             value.codexSubagent = try bool()
             value.codexHeaderRead = try bool()
             value.codexRoot = try string()
+            value.codexTotalsSession = try string()
             value.copilotTotals = try dictionary { try $0.tokens() }
             value.copilotRequests = try dictionary { try $0.amount() }
             value.copilotRequestModels = try dictionary { try $0.string() }
