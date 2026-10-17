@@ -285,6 +285,18 @@ enum AgentUsageReadTests {
                             && host.cursors[file.path]?.state.session == "child-\(index)" && host.store.live.count == 1,
                          "a Codex \(kind) log keeps its own metadata and owns no turn when its parent's is copied after it")
         }
+        // A subagent's responses count toward its thread's turn and keep it
+        // working while the thread only waits on it.
+        host.store.closeIdleTurns(now: Date(timeIntervalSince1970: now + 600), after: 120)
+        suite.expect(host.store.live.isEmpty, "a quiet Codex thread stops showing as working")
+        _ = write("worker.jsonl", [
+            #"{"type":"session_meta","timestamp":\#(now + 580),"payload":{"id":"worker","session_id":"\#(thread)","parent_thread_id":"\#(thread)","source":{"subagent":{"thread_spawn":{"parent_thread_id":"\#(thread)","depth":1}}}}}"#,
+            #"{"type":"event_msg","timestamp":\#(now + 580),"payload":{"type":"task_started"}}"#,
+            #"{"type":"token_usage_record","timestamp":\#(now + 590),"payload":{"response_id":"worker-response","usage":{"input_tokens":6,"output_tokens":1}}}"#
+        ])
+        suite.expect(host.store.live.count == 1 && host.store.live.first?.id == reverted.path
+                        && host.store.live.first?.tokens.total == 21,
+                     "a Codex subagent's responses count toward its thread's turn and keep it working while the thread waits")
         let saved = AgentUsageReadProductionArchive.Contents(providers: [.codex], store: host.store.saved,
                                                              cursors: host.cursors.values.map(\.saved))
         let encoded = AgentUsageReadProductionArchive.encode(saved, build: "codex-thread-test")
@@ -298,6 +310,11 @@ enum AgentUsageReadTests {
             let restoredHost = Host()
             restoredHost.cursors = restored.cursors
             restoredHost.store = restored.store
+            _ = write("worker.jsonl", [
+                #"{"type":"token_usage_record","timestamp":\#(now + 595),"payload":{"response_id":"worker-response-2","usage":{"input_tokens":2,"output_tokens":1}}}"#
+            ], append: true, into: restoredHost)
+            suite.expect(restoredHost.store.live.first?.id == reverted.path && restoredHost.store.live.first?.tokens.total == 24,
+                         "a restored Codex subagent finds its thread's log again")
             _ = write("child0.jsonl", [
                 #"{"type":"session_meta","timestamp":\#(now),"payload":{"id":"\#(thread)","source":"vscode"}}"#,
                 #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_started"}}"#,
@@ -306,7 +323,7 @@ enum AgentUsageReadTests {
             _ = write(reverted.lastPathComponent, [
                 #"{"type":"event_msg","timestamp":\#(now),"payload":{"type":"task_complete"}}"#
             ], append: true, into: restoredHost)
-            suite.expect(restoredHost.store.live.isEmpty && restoredHost.store.records.count == 2,
+            suite.expect(restoredHost.store.live.isEmpty && restoredHost.store.records.count == 4,
                          "after cache restore a child adds usage without a turn and the reverted thread's task finishes")
         }
         _ = write(reverted.lastPathComponent, [

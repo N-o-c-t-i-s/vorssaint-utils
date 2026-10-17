@@ -570,12 +570,31 @@ final class AgentLogCursor {
     /// part of it was read. What its old contents gave is still counted, so
     /// its progress is not saved: the next launch reads it as rewritten.
     private(set) var restarted = false
+    /// The log of the thread a Codex subagent works for, and how many logs
+    /// there were when it was looked for. Not saved: a relaunch looks again.
+    private var codexParentLog: String?
+    private var codexParentSearch = -1
 
     init(path: String, provider: AgentProvider) {
         self.path = path
         self.provider = provider
         let parent = provider == .claude ? AgentLogCursor.parent(of: path) : nil
         self.parent = parent
+    }
+
+    /// The log whose turn a Codex subagent's responses count toward. It can
+    /// be read after the subagent's, and a reverted thread goes on in a new
+    /// log, so it is looked for again whenever the logs change; the one
+    /// written last is the thread's current log.
+    func codexParent(among cursors: [String: AgentLogCursor]) -> String? {
+        guard provider == .codex, !state.codexRoot.isEmpty, !tracksTurns else { return nil }
+        if codexParentSearch != cursors.count {
+            codexParentSearch = cursors.count
+            codexParentLog = cursors.values
+                .filter { $0.provider == .codex && $0.tracksTurns && $0.state.session == state.codexRoot }
+                .max { $0.modified < $1.modified }?.path
+        }
+        return codexParentLog
     }
 
     /// Where reading stopped, at a line boundary: a line still being written
@@ -610,6 +629,7 @@ final class AgentLogCursor {
         discarding = false
         state = AgentLogState()
         fingerprinted = nil
+        codexParentSearch = -1
     }
 
     func fingerprintRead() {

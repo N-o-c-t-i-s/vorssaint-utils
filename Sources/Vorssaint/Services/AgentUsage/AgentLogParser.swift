@@ -40,13 +40,16 @@ struct AgentLogState: Equatable {
     var lastTotal: AgentTokens?
     /// Codex runs the thread on the fast tier, which bills at a premium.
     var fast = false
-    /// A Codex subagent, review or memory task works for a thread another
-    /// log follows. Only the log's metadata says so: a reverted thread goes
-    /// on in a log named after both the thread and a new rollout.
+    /// A Codex subagent, review or memory task owns no turn. Only the log's
+    /// metadata says so: a reverted thread goes on in a log named after both
+    /// the thread and a new rollout.
     var codexSubagent = false
     /// The first Codex metadata line describes the log's own thread; a later
     /// one is history copied from the thread it came from.
     var codexHeaderRead = false
+    /// The thread a person started that a Codex subagent works for, whose
+    /// turn its responses count toward.
+    var codexRoot = ""
     /// Copilot shutdown counters are cumulative for the life of a session.
     var copilotTotals: [String: AgentTokens] = [:]
     /// Counted requests by model; the empty key holds unresolved attribution.
@@ -274,6 +277,10 @@ enum AgentLogParser {
             // `subagent` or `internal`; a person's thread names its client.
             let source = payload["source"] as? [String: Any]
             state.codexSubagent = source?["subagent"] != nil || source?["internal"] != nil
+            // A subagent's session is the thread a person started, however
+            // deep it runs; its parent thread stands in when that is missing.
+            let root = payload["session_id"] as? String ?? payload["parent_thread_id"] as? String ?? ""
+            if state.codexSubagent, !root.isEmpty, root != state.session { state.codexRoot = native(root) }
             return []
         case "turn_context":
             if let model = payload["model"] as? String, !model.isEmpty { state.model = native(model) }
